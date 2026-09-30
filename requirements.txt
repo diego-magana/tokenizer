@@ -1,0 +1,7 @@
+# deps for the tests and notebooks; the package itself needs only `regex`
+pytest
+tiktoken
+sentencepiece
+jupyter
+matplotlib
+datasets

@@ -1,0 +1,11 @@
+__pycache__/
+*.egg-info/
+.venv/
+.ipynb_checkpoints/
+
+# downloaded, never committed — python scripts/download_gpt2.py
+assets/gpt2/
+
+# scratch files the walkthrough's sentencepiece section writes
+notebooks/toy.txt
+notebooks/tok400.*
