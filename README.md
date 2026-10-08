@@ -10,24 +10,28 @@ If you want the short version, read [`notebooks/02_vocab_size.ipynb`](notebooks/
 
 ## What I found
 
-A model is billed, bounded, and slowed per token, so bytes per token is a price, and vocabulary size is the one dial a tokenizer has for it. One tokenizer, trained once on 2 MB of prose to a 16k vocabulary, measured at every size from 512 up — merges are learned in order, so the first *k* merges of a 16k run *are* the tokenizer trained to *k* — on the training text and on held-out prose, with GPT-2 and cl100k on the same held-out text as reference points.
+A model is billed, bounded, and slowed per token, so bytes per token is a price, and vocabulary size is the one dial a tokenizer has for it. This is a look at what each doubling of that dial buys, on one tokenizer and one corpus.
 
-| vocab | train | held-out | gap | bytes per 1,024-token window |
+One training run covers the whole sweep. BPE learns merges greedily and in order, so the first *k* merges of a 16k run are exactly the tokenizer you'd get by training to *k*: train once, truncate to every smaller vocabulary. I trained on 2 MB of FineWeb-Edu prose, measured from 512 to 16k on the training text and on 1 MB of held-out prose, and put GPT-2 and cl100k on the same held-out text for reference.
+
+| vocab | train | held-out | gap | tokens per MB, held-out |
 |---|---|---|---|---|
-| 512 | 2.01 | 2.01 | 0.0% | 2,061 |
-| 1,024 | 2.51 | 2.51 | 0.1% | 2,566 |
-| 2,048 | 2.97 | 2.95 | 0.9% | 3,020 |
-| 4,096 | 3.47 | 3.40 | 2.0% | 3,484 |
-| 8,192 | 3.98 | 3.83 | 3.8% | 3,925 |
-| 16,384 | 4.44 | 4.20 | 5.8% | 4,297 |
-| gpt2 (50,257) | — | 4.66 | — | 4,769 |
-| cl100k (100,277) | — | 4.78 | — | 4,894 |
+| 512 | 2.01 | 2.01 | 0.0% | 497k |
+| 1,024 | 2.51 | 2.51 | 0.1% | 399k |
+| 2,048 | 2.97 | 2.95 | 0.9% | 339k |
+| 4,096 | 3.47 | 3.40 | 2.0% | 294k |
+| 8,192 | 3.98 | 3.83 | 3.8% | 261k |
+| 16,384 | 4.44 | 4.20 | 5.8% | 238k |
+| GPT-2 (50,257) | — | 4.66 | — | 215k |
+| cl100k (100,277) | — | 4.78 | — | 209k |
 
 [![Compression vs vocabulary size](assets/vocab_size.png)](notebooks/02_vocab_size.ipynb)
 
-**Each doubling buys less than the last, and a vocabulary overfits.** The first doubling buys +24% on held-out prose, the last +9%. The train/held-out gap opens from 0.0% at 512 to 5.8% at 16k: past a few thousand merges the tokenizer is spending entries on pairs frequent in its 2 MB and nowhere else. That is why production tokenizers train on gigabytes — and why GPT-2's 50k lands only 11% above this run's 16k on prose it never saw, and cl100k only 2.6% above GPT-2 with twice the vocabulary again.
+**Each doubling adds about half a byte per token.** On the training text the gain is 0.46–0.51 at every step from 512 to 16k, so compression is linear in log vocabulary — the straight line in the figure. What you pay for is the reciprocal, so the same half-byte saves fewer tokens each time: 98k per megabyte for the first doubling, then 60k, 45k, 33k, and 23k.
 
-**What this doesn't show.** Bytes per token is compression, not quality — whether a larger vocabulary helps a model predict is a training experiment. The references were trained on other corpora, so they show where production tokenizers land on this text, not what this trainer would reach at their size.
+**The held-out line falls behind as the vocabulary grows.** It sits on the training line at 512 — the two samples agree at the byte-pair level — and trails it by 0.9% at 2k, 3.8% at 8k, and 5.8% at 16k. The last doubling adds 0.46 on the training text and 0.36 held out: a growing share of the new merges are pairs frequent in these 2 MB and nowhere else, which is the ordinary reason tokenizers are trained on far more text than this. GPT-2, with 50k entries and a corpus 20,000× larger, reaches 4.66 on this held-out text, about where the held-out line points; cl100k adds 2.6% with twice the vocabulary again, most of it spent on code and other languages.
+
+**What this doesn't show.** Bytes per token is compression, not quality: whether a larger vocabulary helps a model predict is a training experiment. Two megabytes and one held-out sample make the trend visible but not precise — the gap is one sample's number. The references were trained on other corpora, cl100k with a different pre-split regex too, so they show where production tokenizers land on this text, not what this trainer would reach at their size.
 
 ## What it builds
 
@@ -42,7 +46,7 @@ pytest                              # 26 invariants
 jupyter notebook notebooks/02_vocab_size.ipynb
 ```
 
-The corpus and the trained tokenizer are committed, so the notebook reproduces the figure from `assets/prose_16k.model` in under a minute. Deleting that file retrains it (10–15 minutes); `scripts/fetch_prose.py` refetches the corpus.
+The corpus and the trained tokenizer are committed, so the notebook reproduces the figure from `assets/prose_16k.model` in under a minute. Deleting that file retrains it (about seven minutes); `scripts/fetch_prose.py` refetches the corpus.
 
 ```python
 from tokenizer import RegexTokenizer
@@ -75,7 +79,7 @@ tokenizer/
 
 **Encode applies merges in learned order, not frequency order.** The most frequent pair in the *input* is irrelevant; the earliest-learned pair *present* wins, one merge at a time. Any other rule can produce a token sequence the model was never trained on. `test_basic.py` pins this with a case where the orders disagree; `test_regex.py` checks that encoding the training text lands on exactly the ids training ended with.
 
-**Training counts over distinct chunks, weighted by frequency.** Two megabytes is ~400k regex chunks but only ~40k distinct ones; counting each once with its multiplicity gives the same statistics for a tenth of the work. Ties break on the pair itself, so the result depends only on the corpus — which is what makes a 16k run truncate to exactly the 4k run, and what `test_regex.py` verifies against a plain unweighted count.
+**Training counts over distinct chunks, weighted by frequency.** Two megabytes is 402k regex chunks but only 36k distinct ones; counting each once with its multiplicity gives the same statistics for a tenth of the work. Ties break on the pair itself, so the result depends only on the corpus — which is what makes a 16k run truncate to exactly the 4k run, and what `test_regex.py` verifies against a plain unweighted count.
 
 ## Attribution
 
